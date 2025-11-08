@@ -10,8 +10,10 @@ async fn main() -> std::io::Result<()> {
     _ = dotenv::dotenv();
 
 
-    let user = std::env::var("USER").expect("Secret not found");
+    let user = std::env::var("USERNAME").expect("Secret not found");
     let secret = std::env::var("SECRET").expect("Secret not found");
-    Alma::run("192.168.10.100:5038".to_string(), user, secret).await;
+    let socket_ami = std::env::var("AMI").expect("Socket AMI not found");
+    
+    Alma::run(socket_ami, user, secret).await;
     Ok(())
 }

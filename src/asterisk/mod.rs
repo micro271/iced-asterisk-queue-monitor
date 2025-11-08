@@ -13,15 +13,18 @@ pub struct Alma;
 
 
 impl Alma {
-    pub async fn run(socket: String,user: String, secret: String) {
+    pub async fn run(socket: String, user: String, secret: String) {
         let stream = TcpStream::connect(socket).await.unwrap();
         
         let mut tmp = EventHandler::new(stream);
-        tmp.login("callcenter", "test").await;
-        tmp.join_queue().await;
+        tmp.login(&user, &secret).await;
+
         loop {
-            let tmp = tmp.next().await;
-            //println!("{tmp:?}");
+            let tmp =  tmp.next().await;
+            if tmp.is_none() {
+                break;
+            }
+            println!("{tmp:?}");
         }
     }
 }

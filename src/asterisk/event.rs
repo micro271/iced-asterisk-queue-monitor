@@ -1,6 +1,7 @@
 use std::{mem::transmute_copy, task::Poll};
 
-use futures::{FutureExt, StreamExt};
+use bytes::{Buf, Bytes, BytesMut};
+use futures::FutureExt;
 use tokio::{io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, ReadBuf}, net::{TcpStream, tcp::{OwnedReadHalf, OwnedWriteHalf}}};
 
 use crate::asterisk::entities::{Entry, Params, member::*};
@@ -9,9 +10,8 @@ use crate::asterisk::entities::{Entry, Params, member::*};
 pub struct EventHandler {
     reader: OwnedReadHalf,
     writer: OwnedWriteHalf,
-    buffer: Vec<u8>,
-    pos: usize,
-    find_until: usize,
+    buffer: BytesMut,
+    state: State,
 }
 
 impl EventHandler {
@@ -20,20 +20,17 @@ impl EventHandler {
         Self {
             reader,
             writer,
-            pos: 0,
-            buffer: Vec::new(),
-            find_until: 0,
+            buffer: BytesMut::new(),
+            state: State::State0,
         }
     }
     
     pub async fn login(&mut self, user: &str, secret: &str) {
-        println!("1");
         self.writer.write_all(format!("Action: Login\r\nUsername: {user}\r\nSecret: {secret}\r\n\r\n").as_bytes()).await.unwrap();
-        //let tmp = self.next().await;
     }
 
     pub async fn join_queue(&mut self) {
-        self.writer.write_all(b"Action: Events\r\nEventMask: queue\r\n\r\n").await.unwrap();
+        self.writer.write_all(b"Action: Events\r\nEventMask: queue,agent\r\n\r\n").await.unwrap();
     }
 }
 
@@ -42,36 +39,77 @@ impl futures::stream::Stream for EventHandler {
 
     fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
         let this = self.get_mut();
-
         loop {
-            println!("{}", this.pos);
-            this.pos += 1;
-            let mut buf = [0u8; 1024];
-            let n = match futures::ready!(this.reader.read(&mut buf).boxed().poll_unpin(cx)) {
-                Ok(n ) => n,
-                Err(_) => break Poll::Ready(None),
-            };
-
-            this.buffer.extend_from_slice(&buf[..n]);
-            
-
-            if let Some(e) = this.buffer[this.find_until..].windows(4).position(|x| x == b"\r\n\r\n") {
-                println!("{:?}", std::str::from_utf8(&this.buffer[..this.find_until + e + 4]));
-                //let resp = QueueEvent::try_from(&this.buffer[..(this.find_until+e)]);
-                this.buffer.drain(..(this.find_until + e + 4));
-                if n == 0 && this.buffer.len() != 0 {
-                    this.buffer.clear();
+            match this.state.clone() {
+                State::Done => { return Poll::Ready(None); }
+                State::State0 => {
+                    println!("entramos");
+                    this.state = State::Read;
                 }
-                this.find_until = 0;
-                break Poll::Ready(Some(Ok(QueueEvent::CallerAbandon)));
-            } else if n == 0 {
-                this.buffer.clear();
-                break Poll::Ready(Some(Err(())));
-            } else {
-                this.find_until += n.saturating_sub(4);
+                State::CheckToProcess{check } => {
+                    if let Some(n) = this.buffer.windows(4).rposition(|x| x == b"\r\n\r\n") {
+                        this.state = State::Process(this.buffer.split_to(n+4), n);
+                    } else if !check.is_to_continue() {
+                        this.state = State::Done;
+                    } else {
+                        this.state = State::Read;
+                    }
+                }
+                State::Read => {
+                    match futures::ready!(this.reader.read(&mut this.buffer).boxed().poll_unpin(cx)) {
+                        Ok(n ) => {
+                            if n == 0 {
+                                this.state = State::EOF
+                            } else {
+                                println!("bytes leidos {n}");
+                                this.state = State::CheckToProcess{check: InnerStateCheckToProcess::ToContinue}
+                            }
+                        },
+                        Err(er) => {
+                            println!("{er}");
+                            return Poll::Ready(None)
+                        },
+                    }
+                },
+                State::Process(mut bytes, n) => {
+                    println!("{:?}", std::str::from_utf8(bytes.split_to(n).as_ref()));
+                    if !bytes.is_empty() {
+                        this.state = State::CheckToProcess{check: InnerStateCheckToProcess::ToContinue};
+                        return Poll::Ready(Some(Ok(QueueEvent::CallerAbandon)));
+                    } else {
+                        this.state = State::Read
+                    }
+                }
+                State::EOF => {
+                    println!("FIN");
+                    this.state = State::CheckToProcess{check: InnerStateCheckToProcess::ToFinish};
+                }
             }
+            println!("{:?}", this.state);
         }
 
+    }
+}
+
+#[derive(Debug, Clone)]
+enum State {
+    State0,
+    Read,
+    CheckToProcess{check: InnerStateCheckToProcess},
+    Process(BytesMut, usize),
+    Done,
+    EOF,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum InnerStateCheckToProcess {
+    ToContinue,
+    ToFinish,
+}
+
+impl InnerStateCheckToProcess {
+    fn is_to_continue(self) -> bool {
+        matches!(self, InnerStateCheckToProcess::ToContinue)
     }
 }
 
