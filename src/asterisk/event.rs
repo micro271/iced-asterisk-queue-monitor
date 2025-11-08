@@ -1,36 +1,45 @@
 use std::{mem::transmute_copy, task::Poll};
 
-use bytes::{Buf, Bytes, BytesMut};
 use futures::FutureExt;
 use tokio::{io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, ReadBuf}, net::{TcpStream, tcp::{OwnedReadHalf, OwnedWriteHalf}}};
 
-use crate::asterisk::entities::{Entry, Params, member::*};
+use crate::asterisk::entities::{Entry, Params, caller::Caller, member::*};
 
 
 pub struct EventHandler {
     reader: OwnedReadHalf,
     writer: OwnedWriteHalf,
-    buffer: BytesMut,
+    buffer: Vec<u8>,
+    processed: usize,
     state: State,
+    username: String,
+    secret: String,
 }
 
 impl EventHandler {
-    pub fn new(stream: TcpStream) -> Self {
+    pub fn new(stream: TcpStream, username: String, secret: String) -> Self {
         let (reader, writer) = stream.into_split();
         Self {
             reader,
             writer,
-            buffer: BytesMut::new(),
-            state: State::State0,
+            buffer: Vec::new(),
+            processed: 0,
+            state: State::State0Login,
+            username, 
+            secret,
         }
     }
     
-    pub async fn login(&mut self, user: &str, secret: &str) {
-        self.writer.write_all(format!("Action: Login\r\nUsername: {user}\r\nSecret: {secret}\r\n\r\n").as_bytes()).await.unwrap();
+    pub fn login(&self) -> String {
+        format!("Action: Login\r\nUsername: {}\r\nSecret: {}\r\n\r\n", self.username, self.secret)
     }
 
-    pub async fn join_queue(&mut self) {
-        self.writer.write_all(b"Action: Events\r\nEventMask: queue,agent\r\n\r\n").await.unwrap();
+    pub fn event(&self) -> &'static [u8] {
+        b"Action: Events\r\nEventMask: queue,agent\r\n\r\n"
+    }
+
+    pub fn info_queue(&self) -> &'static [u8] {
+        b"Action: QueueStatus\r\n\r\n"
     }
 }
 
@@ -41,41 +50,79 @@ impl futures::stream::Stream for EventHandler {
         let this = self.get_mut();
         loop {
             match this.state.clone() {
-                State::Done => { return Poll::Ready(None); }
-                State::State0 => {
-                    println!("entramos");
-                    this.state = State::Read;
-                }
+                State::State0Login => {
+                    match futures::ready!(this.writer.write(this.login().as_bytes()).boxed().poll_unpin(cx)) {
+                        Ok(e) => {
+                            println!("Bytes written {e}");
+                            this.state = State::Read;
+                        },
+                        Err(_) => return Poll::Ready(None),
+                    }
+                },
+                State::State1Subscriber => {
+                    match futures::ready!(this.writer.write(this.event()).boxed().poll_unpin(cx)) {
+                        Ok(e) => {
+                            println!("Subscriber - bytes escritos: {e}");
+                            this.state = State::Read;
+                        },
+                        Err(_) => return Poll::Ready(None),
+                    }
+                },
+                State::State2Data => {
+                    match futures::ready!(this.writer.write(this.info_queue()).boxed().poll_unpin(cx)) {
+                        Ok(e) => {
+                            println!("Subscriber - bytes escritos: {e}");
+                            this.state = State::Read;
+                        },
+                        Err(_) => return Poll::Ready(None),
+                    }
+                },
+                State::Done => return Poll::Ready(None),
                 State::CheckToProcess{check } => {
-                    if let Some(n) = this.buffer.windows(4).rposition(|x| x == b"\r\n\r\n") {
-                        this.state = State::Process(this.buffer.split_to(n+4), n);
-                    } else if !check.is_to_continue() {
+                    if let Some(pos) = this.buffer[this.processed..].windows(4).position(|x| x == b"\r\n\r\n") {
+                        this.state = State::Process;
+                        this.processed += pos + 3;
+                    }  else if !check.is_to_continue() {
                         this.state = State::Done;
                     } else {
                         this.state = State::Read;
+                        this.processed = this.buffer.len().saturating_sub(4);
                     }
                 }
                 State::Read => {
-                    match futures::ready!(this.reader.read(&mut this.buffer).boxed().poll_unpin(cx)) {
-                        Ok(n ) => {
-                            if n == 0 {
-                                this.state = State::EOF
-                            } else {
-                                println!("bytes leidos {n}");
-                                this.state = State::CheckToProcess{check: InnerStateCheckToProcess::ToContinue}
-                            }
-                        },
+                    let mut buf = [0u8; 1024];
+                    let n = match futures::ready!(this.reader.read(&mut buf).boxed().poll_unpin(cx)) {
+                        Ok(n ) => n,
                         Err(er) => {
                             println!("{er}");
                             return Poll::Ready(None)
                         },
+                    };
+                    if n == 0 {
+                        this.state = State::EOF
+                    } else {
+                        println!("bytes leidos {n}");
+                        this.buffer.extend_from_slice(&buf[..n]);
+                        this.state = State::CheckToProcess{check: InnerStateCheckToProcess::ToContinue}
                     }
                 },
-                State::Process(mut bytes, n) => {
-                    println!("{:?}", std::str::from_utf8(bytes.split_to(n).as_ref()));
-                    if !bytes.is_empty() {
+                State::Process => {
+                    let data = std::str::from_utf8(&this.buffer[..=this.processed]).unwrap();
+                    let data = data.trim_end().to_string();
+                    println!("\n{data}");
+                    this.buffer.drain(..=this.processed);
+                    this.processed = 0;                    
+                    if data.ends_with("Authentication accepted") {
+                        this.state = State::State1Subscriber;
+                        continue;
+                    }
+                    if data.ends_with("Events: On") {
+                        this.state = State::State2Data;
+                        continue;
+                    } 
+                    if !this.buffer.is_empty() {
                         this.state = State::CheckToProcess{check: InnerStateCheckToProcess::ToContinue};
-                        return Poll::Ready(Some(Ok(QueueEvent::CallerAbandon)));
+                        return Poll::Ready(Some(Ok(QueueEvent::MemberBusy)));
                     } else {
                         this.state = State::Read
                     }
@@ -85,18 +132,19 @@ impl futures::stream::Stream for EventHandler {
                     this.state = State::CheckToProcess{check: InnerStateCheckToProcess::ToFinish};
                 }
             }
-            println!("{:?}", this.state);
         }
 
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum State {
-    State0,
+    State0Login,
+    State1Subscriber,
+    State2Data,
     Read,
     CheckToProcess{check: InnerStateCheckToProcess},
-    Process(BytesMut, usize),
+    Process,
     Done,
     EOF,
 }
@@ -124,10 +172,10 @@ pub enum QueueEvent {
     Params(Params),
     Entry(Entry),
     StatusComplete,
-    CallerJoin,
-    CallerLeave,
-    CallerAbandon,
-    CallerReconnect,
+    CallerJoin(Caller),
+    CallerLeave(Caller),
+    CallerAbandon(Caller),
+    CallerReconnect(Caller),
     MemberStatus(MemberStatus),
     MemberPaused(MemberPaused),
     MemberAdded(MemberAdded),
@@ -145,10 +193,10 @@ impl std::fmt::Display for QueueEvent {
             QueueEvent::Params(e) => write!(f, "QueueParams({e:?})"),
             QueueEvent::Entry(e) => write!(f, "QueueEntry({e:?})"),
             QueueEvent::StatusComplete => write!(f, "QueueStatusComplete"),
-            QueueEvent::CallerJoin => write!(f, "QueueCallerJoin"),
-            QueueEvent::CallerLeave => write!(f, "QueueCallerLeave"),
-            QueueEvent::CallerAbandon => write!(f, "QueueCallerAbandon"),
-            QueueEvent::CallerReconnect => write!(f, "QueueCallerReconnect"),
+            QueueEvent::CallerJoin(_) => write!(f, "QueueCallerJoin"),
+            QueueEvent::CallerLeave(_) => write!(f, "QueueCallerLeave"),
+            QueueEvent::CallerAbandon(_) => write!(f, "QueueCallerAbandon"),
+            QueueEvent::CallerReconnect(_) => write!(f, "QueueCallerReconnect"),
             QueueEvent::MemberPaused(_) => write!(f, "QueueMemberPaused"),
             QueueEvent::MemberStatus(_) => write!(f, "QueueMemberStatus"),
             QueueEvent::MemberAdded(_) => write!(f, "QueueMemberAdded"),
