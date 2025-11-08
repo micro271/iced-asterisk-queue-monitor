@@ -1,11 +1,10 @@
-
 /// Queue: Queue name
 /// Position: Queue position
 /// CallerIDNum: Caller number
 /// CallerIDName: Caller name
 /// WaitTime: Time spent waiting
-/// Uniqueid 
-/// 
+/// Uniqueid
+///
 #[derive(Debug)]
 pub struct Caller {
     queue: String,
@@ -20,7 +19,7 @@ pub struct Caller {
 enum TypeCallerEvent {
     /// the time field represent the time spend wating
     Join,
-    
+
     /// Represent the HoldTime event of an caller
     /// it's the number of time that the caller left the queue
     Leave,

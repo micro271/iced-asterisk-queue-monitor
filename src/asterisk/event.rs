@@ -1,10 +1,15 @@
-use std::{mem::transmute_copy, task::Poll};
+use std::{collections::HashMap, mem::transmute_copy, task::Poll};
 
 use futures::FutureExt;
-use tokio::{io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, ReadBuf}, net::{TcpStream, tcp::{OwnedReadHalf, OwnedWriteHalf}}};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, ReadBuf},
+    net::{
+        TcpStream,
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+    },
+};
 
 use crate::asterisk::entities::{Entry, Params, caller::Caller, member::*};
-
 
 pub struct EventHandler {
     reader: OwnedReadHalf,
@@ -25,13 +30,16 @@ impl EventHandler {
             buffer: Vec::new(),
             processed: 0,
             state: State::State0Login,
-            username, 
+            username,
             secret,
         }
     }
-    
+
     pub fn login(&self) -> String {
-        format!("Action: Login\r\nUsername: {}\r\nSecret: {}\r\n\r\n", self.username, self.secret)
+        format!(
+            "Action: Login\r\nUsername: {}\r\nSecret: {}\r\n\r\n",
+            self.username, self.secret
+        )
     }
 
     pub fn event(&self) -> &'static [u8] {
@@ -46,43 +54,56 @@ impl EventHandler {
 impl futures::stream::Stream for EventHandler {
     type Item = Result<QueueEvent, ()>;
 
-    fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
         let this = self.get_mut();
         loop {
             match this.state.clone() {
                 State::State0Login => {
-                    match futures::ready!(this.writer.write(this.login().as_bytes()).boxed().poll_unpin(cx)) {
+                    match futures::ready!(
+                        this.writer
+                            .write(this.login().as_bytes())
+                            .boxed()
+                            .poll_unpin(cx)
+                    ) {
                         Ok(e) => {
                             println!("Bytes written {e}");
                             this.state = State::Read;
-                        },
+                        }
                         Err(_) => return Poll::Ready(None),
                     }
-                },
+                }
                 State::State1Subscriber => {
                     match futures::ready!(this.writer.write(this.event()).boxed().poll_unpin(cx)) {
                         Ok(e) => {
                             println!("Subscriber - bytes escritos: {e}");
                             this.state = State::Read;
-                        },
+                        }
                         Err(_) => return Poll::Ready(None),
                     }
-                },
+                }
                 State::State2Data => {
-                    match futures::ready!(this.writer.write(this.info_queue()).boxed().poll_unpin(cx)) {
+                    match futures::ready!(
+                        this.writer.write(this.info_queue()).boxed().poll_unpin(cx)
+                    ) {
                         Ok(e) => {
                             println!("Subscriber - bytes escritos: {e}");
                             this.state = State::Read;
-                        },
+                        }
                         Err(_) => return Poll::Ready(None),
                     }
-                },
+                }
                 State::Done => return Poll::Ready(None),
-                State::CheckToProcess{check } => {
-                    if let Some(pos) = this.buffer[this.processed..].windows(4).position(|x| x == b"\r\n\r\n") {
+                State::CheckToProcess { check } => {
+                    if let Some(pos) = this.buffer[this.processed..]
+                        .windows(4)
+                        .position(|x| x == b"\r\n\r\n")
+                    {
                         this.state = State::Process;
                         this.processed += pos + 3;
-                    }  else if !check.is_to_continue() {
+                    } else if !check.is_to_continue() {
                         this.state = State::Done;
                     } else {
                         this.state = State::Read;
@@ -91,27 +112,32 @@ impl futures::stream::Stream for EventHandler {
                 }
                 State::Read => {
                     let mut buf = [0u8; 1024];
-                    let n = match futures::ready!(this.reader.read(&mut buf).boxed().poll_unpin(cx)) {
-                        Ok(n ) => n,
+                    let n = match futures::ready!(this.reader.read(&mut buf).boxed().poll_unpin(cx))
+                    {
+                        Ok(n) => n,
                         Err(er) => {
                             println!("{er}");
-                            return Poll::Ready(None)
-                        },
+                            return Poll::Ready(None);
+                        }
                     };
                     if n == 0 {
                         this.state = State::EOF
                     } else {
                         println!("bytes leidos {n}");
                         this.buffer.extend_from_slice(&buf[..n]);
-                        this.state = State::CheckToProcess{check: InnerStateCheckToProcess::ToContinue}
+                        this.state = State::CheckToProcess {
+                            check: InnerStateCheckToProcess::ToContinue,
+                        }
                     }
-                },
+                }
                 State::Process => {
                     let data = std::str::from_utf8(&this.buffer[..=this.processed]).unwrap();
                     let data = data.trim_end().to_string();
-                    println!("\n{data}");
+                    println!("\n\n{data}");
+                    let tmp = QueueEvent::try_from(&data[..]);
+                    println!("\n{tmp:?}");
                     this.buffer.drain(..=this.processed);
-                    this.processed = 0;                    
+                    this.processed = 0;
                     if data.ends_with("Authentication accepted") {
                         this.state = State::State1Subscriber;
                         continue;
@@ -119,21 +145,24 @@ impl futures::stream::Stream for EventHandler {
                     if data.ends_with("Events: On") {
                         this.state = State::State2Data;
                         continue;
-                    } 
+                    }
                     if !this.buffer.is_empty() {
-                        this.state = State::CheckToProcess{check: InnerStateCheckToProcess::ToContinue};
-                        return Poll::Ready(Some(Ok(QueueEvent::MemberBusy)));
+                        this.state = State::CheckToProcess {
+                            check: InnerStateCheckToProcess::ToContinue,
+                        };
+                        return Poll::Ready(Some(tmp));
                     } else {
                         this.state = State::Read
                     }
                 }
                 State::EOF => {
                     println!("FIN");
-                    this.state = State::CheckToProcess{check: InnerStateCheckToProcess::ToFinish};
+                    this.state = State::CheckToProcess {
+                        check: InnerStateCheckToProcess::ToFinish,
+                    };
                 }
             }
         }
-
     }
 }
 
@@ -143,7 +172,7 @@ enum State {
     State1Subscriber,
     State2Data,
     Read,
-    CheckToProcess{check: InnerStateCheckToProcess},
+    CheckToProcess { check: InnerStateCheckToProcess },
     Process,
     Done,
     EOF,
@@ -161,12 +190,6 @@ impl InnerStateCheckToProcess {
     }
 }
 
-fn from(vec: &mut [u8]) -> QueueEvent {
-    todo!()
-}
-
-
-
 #[derive(Debug)]
 pub enum QueueEvent {
     Params(Params),
@@ -176,6 +199,7 @@ pub enum QueueEvent {
     CallerLeave(Caller),
     CallerAbandon(Caller),
     CallerReconnect(Caller),
+    Member(MemberStatus),
     MemberStatus(MemberStatus),
     MemberPaused(MemberPaused),
     MemberAdded(MemberAdded),
@@ -187,11 +211,41 @@ pub enum QueueEvent {
     MemberBusy,
 }
 
+impl TryFrom<&str> for QueueEvent {
+    type Error = ();
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let mut map = EventGenMap::gen_map(value);
+
+        match map.remove("Event").unwrap_or_default() {
+            "QueueMemberStatus" => Ok(Self::MemberStatus(MemberStatus::parse_from_map(map))),
+            "QueueMember" => Ok(Self::Member(MemberStatus::parse_from_map(map))),
+            "QueueParams" => Ok(Self::Params(Params::parse_from_map(map))),
+            /*
+            "QueueEntry" => Ok(Self::Entry),
+            "QueueStatusComplete" => Ok(Self::StatusComplete),
+            "QueueCallerJoin" => Ok(Self::CallerJoin),
+            "QueueCallerLeave" => Ok(Self::CallerLeave),
+            "QueueCallerAbandon" => Ok(Self::CallerAbandon),
+            "QueueCallerReconnect" => Ok(Self::CallerReconnect),
+            "QueueMemberPaused" => Ok(Self::MemberPaused),
+            "QueueMemberAdded" => Ok(Self::MemberAdded),
+            "QueueMemberCaller" => Ok(Self::MemberCaller),
+            "QueueMemberConnect" => Ok(Self::MemberConnect),
+            "QueueMemberRemoved" => Ok(Self::MemberRemoved),
+            "QueueMemberComplete" => Ok(Self::MemberComplete),
+            "QueueMemberRingnoanswer" => Ok(Self::MemberRingnoanswer),
+            "QueueMemberBusy" => Ok(Self::MemberBusy),*/
+            _ => Ok(Self::MemberBusy),
+        }
+    }
+}
+
 impl std::fmt::Display for QueueEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            QueueEvent::Params(e) => write!(f, "QueueParams({e:?})"),
-            QueueEvent::Entry(e) => write!(f, "QueueEntry({e:?})"),
+            QueueEvent::Member(_) => write!(f, "QueueMember"),
+            QueueEvent::Params(_) => write!(f, "QueueParams"),
+            QueueEvent::Entry(_) => write!(f, "QueueEntry"),
             QueueEvent::StatusComplete => write!(f, "QueueStatusComplete"),
             QueueEvent::CallerJoin(_) => write!(f, "QueueCallerJoin"),
             QueueEvent::CallerLeave(_) => write!(f, "QueueCallerLeave"),
@@ -210,37 +264,28 @@ impl std::fmt::Display for QueueEvent {
     }
 }
 
-impl TryFrom<&[u8]> for QueueEvent {
-    type Error = String;
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        QueueEvent::try_from(std::str::from_utf8(value).unwrap())
+pub struct EventGenMap;
+
+impl EventGenMap {
+    pub fn gen_map(data: &str) -> HashMap<&str, &str> {
+        data.lines()
+            .map(|x| {
+                let (key, value) = x.split_once(':').unwrap_or_default();
+                (key.trim(), value.trim())
+            })
+            .collect()
     }
 }
 
-impl TryFrom<&str> for QueueEvent {
-    type Error = String;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        /* 
-        match value {
-            "QueueParams" => Ok(QueueEvent::Params),
-            "QueueEntry" => Ok(QueueEvent::Entry()),
-            "QueueStatusComplete" => Ok(QueueEvent::StatusComplete),
-            "QueueCallerJoin" => Ok(QueueEvent::CallerJoin),
-            "QueueCallerLeave" => Ok(QueueEvent::CallerLeave),
-            "QueueCallerAbandon" => Ok(QueueEvent::CallerAbandon),
-            "QueueCallerReconnect" => Ok(QueueEvent::CallerReconnect),
-            "QueueMemberPaused" => Ok(QueueEvent::MemberPaused),
-            "QueueMemberStatus" => Ok(QueueEvent::MemberStatus),
-            "QueueMemberAdded" => Ok(QueueEvent::MemberAdded),
-            "QueueMemberCaller" => Ok(QueueEvent::MemberCaller),
-            "QueueMemberConnect" => Ok(QueueEvent::MemberConnect),
-            "QueueMemberRemoved" => Ok(QueueEvent::MemberRemoved),
-            "QueueMemberComplete" => Ok(QueueEvent::MemberComplete),
-            "QueueMemberRingnoanswer" => Ok(QueueEvent::MemberRingnoanswer),
-            "QueueMemberBusy" => Ok(QueueEvent::MemberBusy),
-            _ => Err(String::new())
-        }
-        */
-        todo!()
+pub trait ParserEvent {
+    fn parse_from_map(data: HashMap<&str, &str>) -> Self
+    where
+        Self: Sized;
+
+    fn parser(data: &str) -> Self
+    where
+        Self: Sized,
+    {
+        Self::parse_from_map(EventGenMap::gen_map(data))
     }
 }

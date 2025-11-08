@@ -1,22 +1,52 @@
-use crate::asterisk::entities::Membership;
+use std::collections::HashMap;
+
+use iced::keyboard::key;
+
+use crate::asterisk::event::ParserEvent;
 
 ///
 /// Queue user information
 /// This information is received when we are connected to the queue event
-/// 
+///
 /// Queue: queue name
-/// 
+///
 #[derive(Debug)]
 pub struct MemberStatus {
     queue: String,
-    location: String,
+    log_in_time: String,
+    member_name: String,
     calls_taken: u16,
-    membership: Membership,
     last_call: u64,
     in_call: bool,
+    interface: String,
+    last_pause: u64,
     paused: bool,
     status: Status,
     pause_reason: String,
+}
+
+impl ParserEvent for MemberStatus {
+    fn parse_from_map(mut map: HashMap<&str, &str>) -> Self
+    where
+        Self: Sized,
+    {
+        Self {
+            queue: map.remove("Queue").unwrap().to_string(),
+            interface: map.remove("Interface").unwrap_or(map.remove("StateInterface").unwrap()).to_string(),
+            log_in_time: map.remove("LoginTime").unwrap().to_string(),
+            last_pause: map.remove("LastPause").unwrap().parse().unwrap_or_default(),
+            calls_taken: map
+                .remove("CallsTaken")
+                .and_then(|x| x.parse().ok())
+                .unwrap(),
+            member_name: map.remove("MemberName").unwrap_or(map.remove("Name").unwrap_or_default()).to_string(),
+            last_call: map.remove("LastCall").unwrap().parse().unwrap(),
+            in_call: map.remove("InCall").map(|x| x == "1").unwrap_or_default(),
+            paused: map.remove("Paused").map(|x| x == "1").unwrap_or_default(),
+            status: map.remove("Status").unwrap().try_into().unwrap(),
+            pause_reason: map.remove("PausedReason").unwrap().to_string(),
+        }
+    }
 }
 
 // Member status
@@ -33,9 +63,28 @@ enum Status {
     OnHold,
 }
 
+impl TryFrom<&str> for Status {
+    type Error = ();
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        
+        match value {
+            "0" => Ok(Self::NotInUse),
+            "1" => Ok(Self::OnHold),
+            "2" => Ok(Self::InUse),
+            "3" => Ok(Self::Busy),
+            "4" => Ok(Self::Unavailable),
+            "5" => Ok(Self::RingingAndInUse),
+            "6" => Ok(Self::Ringing),
+            "7" => Ok(Self::Unknown),
+            "8" => Ok(Self::Invalid),
+            _ => Err(())
+        }
+    }
+}
+
 ///
 /// The agent is paused
-/// 
+///
 /// Queue: name of the queue
 /// Interface: Agnet/endpoint
 /// Paused:
@@ -64,13 +113,12 @@ pub struct MemberPaused {
 pub struct MemberAdded {
     queue: String,
     interface: String,
-    membership: Membership,
     penalty: u16,
     paused: bool,
 }
 
 /// It's asigned an caller to member
-/// 
+///
 /// Queue: queue name
 /// Interface: agent or endpoint
 /// CallerIDNum: caller number
@@ -91,7 +139,7 @@ pub struct MemberCaller {
 /// An member answer a call
 /// Queue: queue name
 /// Interface: agent or endpoint
-/// Uniqueid: 
+/// Uniqueid:
 /// HoldTime: waited time to answer the caller
 /// talk time: conversation time
 #[derive(Debug)]
@@ -116,8 +164,7 @@ pub struct MemberRemoved {
     reason: Option<String>,
 }
 
-
-/// 
+///
 /// Finished caller
 /// Queue: queue name
 /// Interface: agent or endpoint
