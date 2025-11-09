@@ -9,7 +9,7 @@ use tokio::{
     },
 };
 
-use crate::asterisk::entities::{Entry, Params, caller::Caller, member::*};
+use crate::asterisk::entities::{Entry, Params, agent::{AgentCompleted, AgentConnect, AgenteCalled}, caller::Caller, member::*};
 
 pub struct EventHandler {
     reader: OwnedReadHalf,
@@ -199,14 +199,14 @@ pub enum QueueEvent {
     CallerLeave(Caller),
     CallerAbandon(Caller),
     CallerReconnect(Caller),
-    Member(MemberStatus),
-    MemberStatus(MemberStatus),
-    MemberPaused(MemberPaused),
-    MemberAdded(MemberAdded),
-    MemberCaller(MemberCaller),
-    MemberConnect(MemberConnect),
-    MemberRemoved(MemberRemoved),
-    MemberComplete(MemberComplete),
+    Member(QueueMember),
+    MemberStatus(QueueMember),
+    MemberPaused(QueueMember),
+    MemberAdded(QueueMember),
+    AgentCaller(AgenteCalled),
+    AgentConnect(AgentConnect),
+    MemberRemoved(QueueMember),
+    MemberComplete(AgentCompleted),
     MemberRingnoanswer, // si AMI tiene campos asociados, hacer struct
     MemberBusy,
 }
@@ -217,8 +217,7 @@ impl TryFrom<&str> for QueueEvent {
         let mut map = EventGenMap::gen_map(value);
 
         match map.remove("Event").unwrap_or_default() {
-            "QueueMemberStatus" => Ok(Self::MemberStatus(MemberStatus::parse_from_map(map))),
-            "QueueMember" => Ok(Self::Member(MemberStatus::parse_from_map(map))),
+            event_member if event_member.starts_with("QueueMember")=> Ok(Self::MemberStatus(QueueMember::parse_from_map(map))),
             "QueueParams" => Ok(Self::Params(Params::parse_from_map(map))),
             /*
             "QueueEntry" => Ok(Self::Entry),
@@ -254,8 +253,8 @@ impl std::fmt::Display for QueueEvent {
             QueueEvent::MemberPaused(_) => write!(f, "QueueMemberPaused"),
             QueueEvent::MemberStatus(_) => write!(f, "QueueMemberStatus"),
             QueueEvent::MemberAdded(_) => write!(f, "QueueMemberAdded"),
-            QueueEvent::MemberCaller(_) => write!(f, "QueueMemberCaller"),
-            QueueEvent::MemberConnect(_) => write!(f, "QueueMemberConnect"),
+            QueueEvent::AgentCaller(_) => write!(f, "QueueMemberCaller"),
+            QueueEvent::AgentConnect(_) => write!(f, "QueueMemberConnect"),
             QueueEvent::MemberRemoved(_) => write!(f, "QueueMemberRemoved"),
             QueueEvent::MemberComplete(_) => write!(f, "QueueMemberComplete"),
             QueueEvent::MemberRingnoanswer => write!(f, "QueueMemberRingnoanswer"),

@@ -1,5 +1,5 @@
 [package]
-name = "iced-asterisk-queue-monitor"
+name = "asterisk-queue-handler-events"
 version = "0.1.0"
 edition = "2024"
 

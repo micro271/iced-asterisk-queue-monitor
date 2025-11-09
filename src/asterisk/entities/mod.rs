@@ -2,6 +2,7 @@ use crate::asterisk::event::ParserEvent;
 
 pub mod caller;
 pub mod member;
+pub mod agent;
 
 /// This struct represent one queue and its state
 /// Event: QueueParams
