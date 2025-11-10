@@ -12,45 +12,45 @@ pub mod member;
 #[derive(Debug, ParserEvent)]
 pub struct Params {
     #[parser(key = "Queue")]
-    queue: String,
+    pub queue: String,
     
     #[parser(use_parse, key = "Calls")]
-    calls: u32,     // llamadas en cola
+    pub calls: u32,     // llamadas en cola
     
     #[parser(use_parse, key = "Holdtime")]
-    hold_time: u64, //promedio de tiempo en espera
+    pub hold_time: u64, //promedio de tiempo en espera
     
     #[parser(use_parse, key = "TalkTime")]
-    talk_time: u64, // promedio de tiempo en conversacion
+    pub talk_time: u64, // promedio de tiempo en conversacion
     
     #[parser(use_parse, key = "Completed")]
-    completed: u32, // llamadas atendidas
+    pub completed: u32, // llamadas atendidas
 
     #[parser(use_parse, key = "Abandoned")]
-    abandoned: u32, // llamadas abandonadasq
+    pub abandoned: u32, // llamadas abandonadasq
 }
 
 // Caller in queue
 #[derive(Debug, ParserEvent)]
 pub struct Entry {
     #[parser(key = "Queue")]
-    queue: String,
+    pub queue: String,
 
     #[parser(key = "CallerIDNum")]
-    caller_id_number: String,
+    pub caller_id_number: String,
 
     #[parser(key = "CallerIDName")]
-    caller_id_name: String,
+    pub caller_id_name: String,
 
     #[parser(key = "ConnectedLineNum")]
-    connected_line_num: String,
+    pub connected_line_num: String,
 
     #[parser(key = "ConnectedLineName")]
-    connected_line_name: String,
+    pub connected_line_name: String,
 
     #[parser(key = "Wait", use_parse)]
-    wait: u64,
+    pub wait: u64,
 
     #[parser(key = "Uniqueid")]
-    unique_id: String,
+    pub unique_id: String,
 }

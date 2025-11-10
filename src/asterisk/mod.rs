@@ -1,12 +1,9 @@
-use std::net::SocketAddr;
-
 use futures::StreamExt;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
 };
 
-use crate::asterisk::event::{EventHandler, QueueEvent};
+use crate::asterisk::event::EventHandler;
 
 pub mod entities;
 pub mod event;

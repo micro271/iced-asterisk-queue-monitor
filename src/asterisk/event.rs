@@ -1,8 +1,8 @@
-use std::{collections::HashMap, mem::transmute_copy, task::Poll};
+use std::{collections::HashMap, task::Poll};
 
 use futures::FutureExt;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, ReadBuf},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{
         TcpStream,
         tcp::{OwnedReadHalf, OwnedWriteHalf},
@@ -12,7 +12,7 @@ use tokio::{
 use crate::asterisk::entities::{
     Entry, Params,
     agent::{AgentComplete, AgentConnect, AgentDump, AgentRingNoAnswer, AgenteCalled},
-    caller::Caller,
+    caller::{Caller, TypeCallerEvent},
     member::*,
 };
 
@@ -203,7 +203,6 @@ pub enum QueueEvent {
     CallerJoin(Caller),
     CallerLeave(Caller),
     CallerAbandon(Caller),
-    CallerReconnect(Caller),
 
     Member(QueueMember),
     MemberStatus(QueueMember),
@@ -241,12 +240,12 @@ impl TryFrom<&str> for QueueEvent {
             "QueueMemberRemoved" => Ok(Self::MemberRemoved(QueueMember::parse_from_map(map))),
             "MemberRingninuse" => Ok(Self::MemberRingninuse(MemberRingninuse::parse_from_map(map))),
             "QueueEntry" => Ok(Self::Entry(Entry::parse_from_map(map))),
+            "QueueCallerJoin" => Ok(Self::CallerJoin(Caller::parse_from_map(map).r#type(TypeCallerEvent::Join))),
+            "QueueCallerLeave" => Ok(Self::CallerLeave(Caller::parse_from_map(map).r#type(TypeCallerEvent::Leave))),
+            "QueueCallerAbandon" => Ok(Self::CallerAbandon(Caller::parse_from_map(map).r#type(TypeCallerEvent::Abandon))),
+
             /*
             "QueueStatusComplete" => Ok(Self::StatusComplete),
-            "QueueCallerJoin" => Ok(Self::CallerJoin),
-            "QueueCallerLeave" => Ok(Self::CallerLeave),
-            "QueueCallerAbandon" => Ok(Self::CallerAbandon),
-            "QueueCallerReconnect" => Ok(Self::CallerReconnect),
             "QueueMemberCaller" => Ok(Self::MemberCaller),
             "QueueMemberConnect" => Ok(Self::MemberConnect),
             "QueueMemberBusy" => Ok(Self::MemberBusy),*/
@@ -266,7 +265,6 @@ impl std::fmt::Display for QueueEvent {
             QueueEvent::CallerJoin(_) => write!(f, "QueueCallerJoin"),
             QueueEvent::CallerLeave(_) => write!(f, "QueueCallerLeave"),
             QueueEvent::CallerAbandon(_) => write!(f, "QueueCallerAbandon"),
-            QueueEvent::CallerReconnect(_) => write!(f, "QueueCallerReconnect"),
             QueueEvent::MemberPaused(_) => write!(f, "QueueMemberPaused"),
             QueueEvent::MemberStatus(_) => write!(f, "QueueMemberStatus"),
             QueueEvent::MemberAdded(_) => write!(f, "QueueMemberAdded"),

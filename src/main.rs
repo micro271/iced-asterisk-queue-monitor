@@ -1,9 +1,4 @@
-pub mod app;
 pub mod asterisk;
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::TcpStream,
-};
 
 use crate::asterisk::Alma;
 

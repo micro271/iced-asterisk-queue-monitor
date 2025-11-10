@@ -1,22 +1,44 @@
+use macros::ParserEvent;
+
 /// Queue: Queue name
 /// Position: Queue position
 /// CallerIDNum: Caller number
 /// CallerIDName: Caller name
 /// WaitTime: Time spent waiting
 /// Uniqueid
-///
-#[derive(Debug)]
+#[derive(Debug, ParserEvent)]
 pub struct Caller {
-    queue: String,
-    position: u16,
-    caller_id: String,
-    caller_name: String,
-    time: String,
-    r#type: TypeCallerEvent,
+    #[parser(key = "Queue")]
+    pub queue: String,
+
+    #[parser(key = "Position", use_parse)]
+    pub position: u16,
+
+    #[parser(key = "CallerIDNum")]
+    pub caller_id_num: String,
+
+    #[parser(key = "CallerIDName")]
+    pub caller_id_name: String,
+
+    #[parser(key = "Uniqueid")]
+    pub callet_unique_id: String,
+
+    #[parser(key = "HoldTime")]
+    pub hold_time: String,
+
+    #[skip_with_defaut]
+    pub r#type: TypeCallerEvent,
 }
 
-#[derive(Debug)]
-enum TypeCallerEvent {
+impl Caller {
+    pub fn r#type(mut self, r#type: TypeCallerEvent) -> Self {
+        self.r#type = r#type;
+        self
+    }
+}
+
+#[derive(Debug, Default)]
+pub enum TypeCallerEvent {
     /// the time field represent the time spend wating
     Join,
 
@@ -27,7 +49,8 @@ enum TypeCallerEvent {
     /// Indicates how long the caller has been waiting
     Abandon,
 
-    Reconnect,
+    #[default]
+    Unknown
 }
 
 impl std::fmt::Display for TypeCallerEvent {
@@ -36,7 +59,7 @@ impl std::fmt::Display for TypeCallerEvent {
             TypeCallerEvent::Join => write!(f, "CallerJoin"),
             TypeCallerEvent::Leave => write!(f, "CallerLeave"),
             TypeCallerEvent::Abandon => write!(f, "CallerAbandon"),
-            TypeCallerEvent::Reconnect => write!(f, "CallerReconnect"),
+            TypeCallerEvent::Unknown => write!(f, "Unknown"),
         }
     }
 }
