@@ -10,7 +10,7 @@ use tokio::{
 };
 
 use crate::asterisk::entities::{
-    Entry, Params,
+    Entry, Params, ResponseAmi, StatusComplete,
     agent::{AgentComplete, AgentConnect, AgentDump, AgentRingNoAnswer, AgenteCalled},
     caller::{Caller, TypeCallerEvent},
     member::*,
@@ -57,7 +57,7 @@ impl EventHandler {
 }
 
 impl futures::stream::Stream for EventHandler {
-    type Item = Result<QueueEvent, ()>;
+    type Item = Result<AmiMessage, ()>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
@@ -126,7 +126,7 @@ impl futures::stream::Stream for EventHandler {
                         }
                     };
                     if n == 0 {
-                        this.state = State::EOF
+                        this.state = State::Eof
                     } else {
                         println!("bytes leidos {n}");
                         this.buffer.extend_from_slice(&buf[..n]);
@@ -139,7 +139,7 @@ impl futures::stream::Stream for EventHandler {
                     let data = std::str::from_utf8(&this.buffer[..=this.processed]).unwrap();
                     let data = data.trim_end().to_string();
                     println!("\n\n{data}");
-                    let tmp = QueueEvent::try_from(&data[..]);
+                    let tmp = AmiMessage::try_from(&data[..]);
                     println!("\n{tmp:?}");
                     this.buffer.drain(..=this.processed);
                     this.processed = 0;
@@ -160,7 +160,7 @@ impl futures::stream::Stream for EventHandler {
                         this.state = State::Read
                     }
                 }
-                State::EOF => {
+                State::Eof => {
                     println!("FIN");
                     this.state = State::CheckToProcess {
                         check: InnerStateCheckToProcess::ToFinish,
@@ -180,7 +180,7 @@ enum State {
     CheckToProcess { check: InnerStateCheckToProcess },
     Process,
     Done,
-    EOF,
+    Eof,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -196,19 +196,21 @@ impl InnerStateCheckToProcess {
 }
 
 #[derive(Debug)]
-pub enum QueueEvent {
+pub enum AmiMessage {
+    Response(ResponseAmi),
+
     Params(Params),
     Entry(Entry),
-    StatusComplete,
+    StatusComplete(StatusComplete),
     CallerJoin(Caller),
     CallerLeave(Caller),
     CallerAbandon(Caller),
 
-    Member(QueueMember),
-    MemberStatus(QueueMember),
-    MemberPaused(QueueMember),
-    MemberAdded(QueueMember),
-    MemberRemoved(QueueMember),
+    Member(Member),
+    MemberStatus(Member),
+    MemberPaused(Member),
+    MemberAdded(Member),
+    MemberRemoved(Member),
     MemberRingninuse(MemberRingninuse),
 
     AgentCalled(AgenteCalled),
@@ -217,16 +219,23 @@ pub enum QueueEvent {
 
     AgentRingNoAnswer(AgentRingNoAnswer), // si AMI tiene campos asociados, hacer struct
     AgentDump(AgentDump),
-    MemberBusy,
+    None
 }
 
-impl TryFrom<&str> for QueueEvent {
+impl TryFrom<&str> for AmiMessage {
     type Error = ();
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let mut map = EventGenMap::gen_map(value);
 
+        if map.contains_key("Response") {
+            return Ok(AmiMessage::Response(ResponseAmi::parse_from_map(map)));
+        }
+
         match map.remove("Event").unwrap_or_default() {
-            "QueueMemberStatus" => Ok(Self::MemberStatus(QueueMember::parse_from_map(map))),
+            "QueueStatusComplete" => Ok(AmiMessage::StatusComplete(
+                StatusComplete::parse_from_map(map),
+            )),
+            "QueueMemberStatus" => Ok(Self::MemberStatus(Member::parse_from_map(map))),
             "QueueParams" => Ok(Self::Params(Params::parse_from_map(map))),
             "AgentCalled" => Ok(Self::AgentCalled(AgenteCalled::parse_from_map(map))),
             "AgentConnect" => Ok(Self::AgentConnect(AgentConnect::parse_from_map(map))),
@@ -234,47 +243,51 @@ impl TryFrom<&str> for QueueEvent {
             "AgentRingNoAnswer" => Ok(Self::AgentRingNoAnswer(AgentRingNoAnswer::parse_from_map(
                 map,
             ))),
+            "QueueMember" => Ok(Self::Member(Member::parse_from_map(map))),
             "AgentDump" => Ok(Self::AgentDump(AgentDump::parse_from_map(map))),
-            "QueueMemberPaused" => Ok(Self::MemberPaused(QueueMember::parse_from_map(map))),
-            "QueueMemberAdded" => Ok(Self::MemberAdded(QueueMember::parse_from_map(map))),
-            "QueueMemberRemoved" => Ok(Self::MemberRemoved(QueueMember::parse_from_map(map))),
-            "MemberRingninuse" => Ok(Self::MemberRingninuse(MemberRingninuse::parse_from_map(map))),
+            "QueueMemberPaused" => Ok(Self::MemberPaused(Member::parse_from_map(map))),
+            "QueueMemberAdded" => Ok(Self::MemberAdded(Member::parse_from_map(map))),
+            "QueueMemberRemoved" => Ok(Self::MemberRemoved(Member::parse_from_map(map))),
+            "MemberRingninuse" => Ok(Self::MemberRingninuse(MemberRingninuse::parse_from_map(
+                map,
+            ))),
             "QueueEntry" => Ok(Self::Entry(Entry::parse_from_map(map))),
-            "QueueCallerJoin" => Ok(Self::CallerJoin(Caller::parse_from_map(map).r#type(TypeCallerEvent::Join))),
-            "QueueCallerLeave" => Ok(Self::CallerLeave(Caller::parse_from_map(map).r#type(TypeCallerEvent::Leave))),
-            "QueueCallerAbandon" => Ok(Self::CallerAbandon(Caller::parse_from_map(map).r#type(TypeCallerEvent::Abandon))),
-
-            /*
-            "QueueStatusComplete" => Ok(Self::StatusComplete),
-            "QueueMemberCaller" => Ok(Self::MemberCaller),
-            "QueueMemberConnect" => Ok(Self::MemberConnect),
-            "QueueMemberBusy" => Ok(Self::MemberBusy),*/
-            _ => Ok(Self::MemberBusy),
+            "QueueCallerJoin" => Ok(Self::CallerJoin(
+                Caller::parse_from_map(map).r#type(TypeCallerEvent::Join),
+            )),
+            "QueueCallerLeave" => Ok(Self::CallerLeave(
+                Caller::parse_from_map(map).r#type(TypeCallerEvent::Leave),
+            )),
+            "QueueCallerAbandon" => Ok(Self::CallerAbandon(
+                Caller::parse_from_map(map).r#type(TypeCallerEvent::Abandon),
+            )),
+            _ => Ok(Self::None),
         }
     }
 }
 
-impl std::fmt::Display for QueueEvent {
+impl std::fmt::Display for AmiMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            QueueEvent::MemberRingninuse(_) => write!(f, "MemberRingninuse"),
-            QueueEvent::Member(_) => write!(f, "QueueMember"),
-            QueueEvent::Params(_) => write!(f, "QueueParams"),
-            QueueEvent::Entry(_) => write!(f, "QueueEntry"),
-            QueueEvent::StatusComplete => write!(f, "QueueStatusComplete"),
-            QueueEvent::CallerJoin(_) => write!(f, "QueueCallerJoin"),
-            QueueEvent::CallerLeave(_) => write!(f, "QueueCallerLeave"),
-            QueueEvent::CallerAbandon(_) => write!(f, "QueueCallerAbandon"),
-            QueueEvent::MemberPaused(_) => write!(f, "QueueMemberPaused"),
-            QueueEvent::MemberStatus(_) => write!(f, "QueueMemberStatus"),
-            QueueEvent::MemberAdded(_) => write!(f, "QueueMemberAdded"),
-            QueueEvent::AgentCalled(_) => write!(f, "AgentCalled"),
-            QueueEvent::AgentConnect(_) => write!(f, "AgentConnect"),
-            QueueEvent::MemberRemoved(_) => write!(f, "QueueMemberRemoved"),
-            QueueEvent::AgentComplete(_) => write!(f, "AgentComplete"),
-            QueueEvent::AgentRingNoAnswer(_) => write!(f, "AgentRingNoAnswer"),
-            QueueEvent::MemberBusy => write!(f, "QueueMemberBusy"),
-            QueueEvent::AgentDump(_) => write!(f, "AgentDump"),
+            AmiMessage::None => write!(f, "None"),
+            AmiMessage::Response(_) => write!(f, "MemberRingninuse"),
+            AmiMessage::MemberRingninuse(_) => write!(f, "MemberRingninuse"),
+            AmiMessage::Member(_) => write!(f, "QueueMember"),
+            AmiMessage::Params(_) => write!(f, "QueueParams"),
+            AmiMessage::Entry(_) => write!(f, "QueueEntry"),
+            AmiMessage::StatusComplete(_) => write!(f, "QueueStatusComplete"),
+            AmiMessage::CallerJoin(_) => write!(f, "QueueCallerJoin"),
+            AmiMessage::CallerLeave(_) => write!(f, "QueueCallerLeave"),
+            AmiMessage::CallerAbandon(_) => write!(f, "QueueCallerAbandon"),
+            AmiMessage::MemberPaused(_) => write!(f, "QueueMemberPaused"),
+            AmiMessage::MemberStatus(_) => write!(f, "QueueMemberStatus"),
+            AmiMessage::MemberAdded(_) => write!(f, "QueueMemberAdded"),
+            AmiMessage::AgentCalled(_) => write!(f, "AgentCalled"),
+            AmiMessage::AgentConnect(_) => write!(f, "AgentConnect"),
+            AmiMessage::MemberRemoved(_) => write!(f, "QueueMemberRemoved"),
+            AmiMessage::AgentComplete(_) => write!(f, "AgentComplete"),
+            AmiMessage::AgentRingNoAnswer(_) => write!(f, "AgentRingNoAnswer"),
+            AmiMessage::AgentDump(_) => write!(f, "AgentDump"),
         }
     }
 }

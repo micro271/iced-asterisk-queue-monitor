@@ -13,16 +13,16 @@ pub mod member;
 pub struct Params {
     #[parser(key = "Queue")]
     pub queue: String,
-    
+
     #[parser(use_parse, key = "Calls")]
-    pub calls: u32,     // llamadas en cola
-    
+    pub calls: u32, // llamadas en cola
+
     #[parser(use_parse, key = "Holdtime")]
     pub hold_time: u64, //promedio de tiempo en espera
-    
+
     #[parser(use_parse, key = "TalkTime")]
     pub talk_time: u64, // promedio de tiempo en conversacion
-    
+
     #[parser(use_parse, key = "Completed")]
     pub completed: u32, // llamadas atendidas
 
@@ -53,4 +53,44 @@ pub struct Entry {
 
     #[parser(key = "Uniqueid")]
     pub unique_id: String,
+}
+
+#[derive(Debug, ParserEvent)]
+pub struct StatusComplete {
+    #[parser(key = "ListItems", use_parse)]
+    pub len: i32,
+}
+
+#[derive(Debug, ParserEvent)]
+pub struct ResponseAmi {
+    #[parser(key = "Response")]
+    pub response: ResponseAmiResult,
+
+    #[parser(key = "Message")]
+    pub message: String,
+}
+
+impl ResponseAmi {
+    fn is_ok(&self) -> bool {
+        self.response == ResponseAmiResult::Success
+    }
+}
+
+#[derive(Debug, PartialEq, Default)]
+pub enum ResponseAmiResult {
+    Error,
+    Success,
+
+    #[default]
+    Unknown,
+}
+
+impl From<&str> for ResponseAmiResult {
+    fn from(value: &str) -> Self {
+        match value {
+            "Success" => Self::Success,
+            "Error" => Self::Error,
+            _ => Self::Unknown,
+        }
+    }
 }

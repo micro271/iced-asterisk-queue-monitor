@@ -1,7 +1,5 @@
 use futures::StreamExt;
-use tokio::{
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
 
 use crate::asterisk::event::EventHandler;
 

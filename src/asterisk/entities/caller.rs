@@ -50,7 +50,7 @@ pub enum TypeCallerEvent {
     Abandon,
 
     #[default]
-    Unknown
+    Unknown,
 }
 
 impl std::fmt::Display for TypeCallerEvent {

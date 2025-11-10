@@ -7,7 +7,7 @@ use macros::ParserEvent;
 /// Queue: queue name
 ///
 #[derive(Debug, ParserEvent)]
-pub struct QueueMember {
+pub struct Member {
     #[parser(key = "Queue")]
     pub queue: String,
 

@@ -39,43 +39,43 @@ pub struct AgenteCalled {
 
 /// Raised when a queue member answers and is bridged to a caller in the queue.
 #[derive(Debug, ParserEvent)]
-pub struct AgentConnect {    
+pub struct AgentConnect {
     #[parser(key = "Queue")]
     pub queue: String,
-    
+
     #[parser(key = "Uniqueid")]
     pub caller_unique_id: String,
-    
+
     #[parser(key = "CallerIDNum")]
     pub caller_id_num: String,
-    
+
     #[parser(key = "CallerIDName")]
     pub caller_id_name: String,
 
     #[parser(key = "DestUniqueid")]
     pub dest_unique_id: String,
-    
+
     #[parser(key = "DestCallerIDNum")]
     pub dest_caller_id_num: String,
-    
+
     #[parser(key = "DestCallerIDName")]
     pub dest_caller_id_name: String,
-    
+
     #[parser(key = "DestConnectedLineNum")]
     pub dest_connected_line_num: String,
-    
+
     #[parser(key = "DestConnectedLineName")]
     pub dest_connected_line_name: String,
-    
+
     #[parser(key = "Interface")]
     pub interface: String,
-    
+
     #[parser(key = "MemberName")]
     pub member_name: String,
-    
+
     #[parser(key = "RingTime", use_parse)]
     pub ring_time: u64,
-    
+
     #[parser(key = "HoldTime", use_parse)]
     pub hold_time: u64,
 }
@@ -196,7 +196,6 @@ pub struct AgentDump {
     #[parser(key = "DestCallerIDName")]
     pub dest_unique_id: String,
 }
-
 
 // Raised when an Agent has logged in.
 #[derive(Debug)]
