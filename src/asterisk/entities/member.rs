@@ -14,7 +14,7 @@ pub struct Member {
     #[parser(key = "Interface", key = "StateInterface")]
     pub interface: String,
 
-    #[parser(key = "MemberName")]
+    #[parser(key = "MemberName", key ="Name")]
     pub member_name: String,
 
     #[parser(key = "Status")]

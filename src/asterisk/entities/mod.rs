@@ -66,8 +66,26 @@ pub struct ResponseAmi {
     #[parser(key = "Response")]
     pub response: ResponseAmiResult,
 
-    #[parser(key = "Message")]
+    #[parser(key = "Message", key = "Events")]
     pub message: String,
+
+    #[skip_with_defaut]
+    pub r#type: ResponseAmyType,
+}
+
+impl ResponseAmi {
+    pub fn r#type(mut self, r#type: ResponseAmyType) -> Self {
+        self.r#type = r#type;
+        self
+    }
+}
+
+#[derive(Debug, Default)]
+pub enum ResponseAmyType {
+    Login,
+    Action,
+    #[default]
+    Unknown
 }
 
 impl ResponseAmi {

@@ -1,24 +1,24 @@
-use std::{collections::HashMap, task::Poll};
+use std::{collections::HashMap, pin::Pin, task::Poll};
 
 use futures::FutureExt;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWrite},
     net::{
         TcpStream,
         tcp::{OwnedReadHalf, OwnedWriteHalf},
     },
 };
 
-use crate::asterisk::entities::{
+use crate::{asterisk::entities::{
     Entry, Params, ResponseAmi, StatusComplete,
     agent::{AgentComplete, AgentConnect, AgentDump, AgentRingNoAnswer, AgenteCalled},
     caller::{Caller, TypeCallerEvent},
     member::*,
-};
+}, io::writer::BufWriter};
 
 pub struct EventHandler {
     reader: OwnedReadHalf,
-    writer: OwnedWriteHalf,
+    writer: BufWriter<OwnedWriteHalf>,
     buffer: Vec<u8>,
     processed: usize,
     state: State,
@@ -31,7 +31,7 @@ impl EventHandler {
         let (reader, writer) = stream.into_split();
         Self {
             reader,
-            writer,
+            writer: BufWriter::new(writer),
             buffer: Vec::new(),
             processed: 0,
             state: State::State0Login,
@@ -66,39 +66,25 @@ impl futures::stream::Stream for EventHandler {
         let this = self.get_mut();
         loop {
             match this.state.clone() {
-                State::State0Login => {
-                    match futures::ready!(
-                        this.writer
-                            .write(this.login().as_bytes())
-                            .boxed()
-                            .poll_unpin(cx)
-                    ) {
-                        Ok(e) => {
-                            println!("Bytes written {e}");
-                            this.state = State::Read;
-                        }
-                        Err(_) => return Poll::Ready(None),
+                State::Write => {
+                    let pin = Pin::new(&mut this.writer);
+                    if let Err(er) = futures::ready!(pin.poll_flush(cx)) {
+                        println!("{}", er);
                     }
+
+                    this.state = State::Read;
+                }
+                State::State0Login => {
+                    this.writer.to_write(this.login().as_bytes());
+                    this.state = State::Write;
                 }
                 State::State1Subscriber => {
-                    match futures::ready!(this.writer.write(this.event()).boxed().poll_unpin(cx)) {
-                        Ok(e) => {
-                            println!("Subscriber - bytes escritos: {e}");
-                            this.state = State::Read;
-                        }
-                        Err(_) => return Poll::Ready(None),
-                    }
+                    this.writer.to_write(this.event());
+                    this.state = State::Write;
                 }
                 State::State2Data => {
-                    match futures::ready!(
-                        this.writer.write(this.info_queue()).boxed().poll_unpin(cx)
-                    ) {
-                        Ok(e) => {
-                            println!("Subscriber - bytes escritos: {e}");
-                            this.state = State::Read;
-                        }
-                        Err(_) => return Poll::Ready(None),
-                    }
+                    this.writer.to_write(this.info_queue());
+                    this.state = State::Write;
                 }
                 State::Done => return Poll::Ready(None),
                 State::CheckToProcess { check } => {
@@ -175,6 +161,7 @@ impl futures::stream::Stream for EventHandler {
 enum State {
     State0Login,
     State1Subscriber,
+    Write,
     State2Data,
     Read,
     CheckToProcess { check: InnerStateCheckToProcess },
@@ -228,7 +215,11 @@ impl TryFrom<&str> for AmiMessage {
         let mut map = EventGenMap::gen_map(value);
 
         if map.contains_key("Response") {
-            return Ok(AmiMessage::Response(ResponseAmi::parse_from_map(map)));
+            if map.contains_key("Events") {
+                return Ok(AmiMessage::Response(ResponseAmi::parse_from_map(map).r#type(super::entities::ResponseAmyType::Action)));
+            } else {
+                return Ok(AmiMessage::Response(ResponseAmi::parse_from_map(map).r#type(super::entities::ResponseAmyType::Login)));
+            }
         }
 
         match map.remove("Event").unwrap_or_default() {

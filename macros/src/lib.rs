@@ -3,7 +3,7 @@ use quote::quote;
 use syn::{Data, DeriveInput, Expr,Lit, Meta, parse::Parser, punctuated::Punctuated, token::Comma};
 
 
-#[proc_macro_derive(ParserEvent, attributes(parser, use_parse, key, alternative_key, skip_with_defaut))]
+#[proc_macro_derive(ParserEvent, attributes(parser, use_parse, key, skip_with_defaut))]
 pub fn parse_input_derive_macro(input: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(input).unwrap();
 
@@ -39,10 +39,10 @@ fn impl_parse_input_trait(ast: DeriveInput) -> TokenStream {
 
                                 if meta_name_value.path.is_ident("key") {
                                     if let Expr::Lit(e) = &meta_name_value.value && let Lit::Str(value) = &e.lit {
-                                        if key.is_none() {
-                                            key = Some(vec![value.value()]);
+                                        if let Some(key) = key.as_mut() {
+                                            key.push(value.value());
                                         } else {
-
+                                            key = Some(vec![value.value()]);
                                         }
                                     }
                                 }
